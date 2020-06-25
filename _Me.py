@@ -31,28 +31,47 @@ def download_Prices(tickers_list):
     return ClosePrices
 
 
-def download_Fundamentals(tickers_list):
+def download_Fundamentals(tickers_list, ClosePrices):
     # empty dictionary to append data
+    val_stats_dict = {}
     fndmntl_dict = {}
 
+    # loop each stocks
     for ticker in tqdm(tickers_list, desc="Parsing progress:", unit="tickers"):
-        valuation_stats = si.get_stats_valuation(ticker)
+        valuation_stats = si.get_stats(ticker)
         valuation_stats.columns = ["Valuation", "Current"]
 
+        income_statement = si.get_income_statement(ticker).transpose()
+        # income_statement.columns = income_statement.iloc[0]
+        # income_statement = income_statement.drop(income_statement.index[0])
 
-        ticker_object = yf.Ticker(ticker)
+        balance_sheet = si.get_balance_sheet(ticker).transpose()
+        # balance_sheet.columns = balance_sheet.iloc[0]
+        # balance_sheet = balance_sheet.drop(balance_sheet.index[0])
 
-        #convert info() output from dictionary to dataframe
-        temp_df = pd.DataFrame.from_dict(ticker_object.info, orient="index")
-        temp_df.reset_index(inplace=True)
-        temp_df.columns = ["Attribute", "Recent"]
-        
-        # add (ticker, dataframe) to main dictionary
-        fndmntl_dict[ticker] = temp_df
+        cash_flow_statement = si.get_cash_flow(ticker).transpose()
+        # cash_flow_statement.columns = cash_flow_statement.iloc[0]
+        # cash_flow_statement = cash_flow_statement.drop(cash_flow_statement.index[0])
 
-    combined_data = pd.concat(fndmntl_dict)
-    combined_data.reset_index(drop=True)
-    combined_data.columns = ["Ticker", "Attribute", "Recent"]
+        three_statements = income_statement.merge(balance_sheet, left_index=True, right_index=True, how='outer')
+        three_statements = three_statements.merge(cash_flow_statement, left_index=True, right_index=True, how='outer')
+        three_statements = three_statements.iloc[0]
+        three_statements = three_statements.drop(three_statements.index[0])
+
+        val_stats_dict[ticker] = valuation_stats
+        fndmntl_dict[ticker] = three_statements
+
+        # look up price for each date in three_statement dataframe. Calculate price change from 1 year ago from that date
+
+    combined_fndmntl = pd.concat(fndmntl_dict, sort=False).reset_index(drop=False)
+    combined_fndmntl.rename(columns={"level_0": "Ticker", "level_1": "Date"}, inplace=True)
+    
+    combined_valuation_stats = pd.concat(val_stats_dict, sort=False).reset_index(drop=False)
+    del combined_valuation_stats['level_1']
+    combined_valuation_stats.rename(columns={"level_0": "Ticker"}, inplace=True)
+
+
+    return combined_fndmntl, combined_valuation_stats
 
 if __name__ == "__main__":
 
@@ -60,6 +79,6 @@ if __name__ == "__main__":
         'ABA', 'AFC', 'AFT', 'AIA', 'AIR', 'ALF', 'AOR', 'APL', 'ARB', 'ARG', 'ARV', 'ATM', 'AUG', 'AWF', 'BFG', 'BGI', 'BGP', 'BLT', 'CAV','CBD', 'CDI', 'CEN', 'CGF', 'CMO', 'CNU', 'CVT', 'DGL', 'EBO', 'ENS', 'ERD', 'EVO', 'FBU', 'FPH', 'FRE', 'FSF', 'FWL', 'GEN', 'GEO', 'GFL', 'GMT', 'GNE', 'GSH', 'GTK', 'GXH', 'HGH', 'HLG', 'IFT', 'IKE', 'IPL', 'JLG', 'KMD', 'KPG', 'MCK', 'MCY', 'MEE', 'MEL', 'MET', 'MFT', 'MGL', 'MMH', 'MOA', 'MPG', 'MWE', 'NPH', 'NTL', 'NWF', 'NZK', 'NZM', 'NZO', 'NZR', 'NZX', 'OCA', 'PCT', 'PEB', 'PFI', 'PGW', 'PIL', 'PLX', 'POT', 'PPH', 'PYS', 'QEX', 'RAK', 'RBD', 'RYM', 'SAN', 'SCL', 'SCT', 'SCY', 'SDL', 'SEK', 'SKC', 'SKL', 'SKO', 'SKT', 'SML', 'SNC', 'SPG', 'SPK', 'SPN', 'SPY', 'STU', 'SUM', 'TGG', 'THL', 'TLL', 'TLT', 'TPW', 'TRA', 'TRS', 'TRU', 'TWR', 'VCT', 'VGL', 'VHP', 'VTL', 'WDT', 'WHS', 'ZEL'
         ]
     ALL_INDX = ['^NZ50','^GSPC','^DJI','^VIX']
-    # download_Prices([x+'.NZ' for x in ALL_NZX[:2]] + ALL_INDX)
-    download_Fundamentals([x+'.NZ' for x in ALL_NZX[:2]])
+    ClosePrices = download_Prices([x+'.NZ' for x in ALL_NZX[:2]] + ALL_INDX)
+    download_Fundamentals([x+'.NZ' for x in ALL_NZX[:2]], ClosePrices)
     print(f'DONE !!!!!!!!!')
