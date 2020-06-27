@@ -4,6 +4,13 @@
     yahoo_fin: https://algotrading101.com/learn/yahoo-finance-api/ , http://theautomatic.net/2018/01/25/coding-yahoo_fin-package/ 
     freemium source:RapidAPI: https://rapidapi.com/apidojo/api/yahoo-finance1/endpoints
 """
+"""
+    - use return instead of price difference as dependent variable
+    - compute graham number
+    - add explanatory variables: OCR, business confidence, GDP, inflation, interest rate, 
+    - use PE ratio, sharpe ratio in Timbre, if exists
+"""
+from datetime import datetime
 import pandas as pd
 import yfinance as yf
 from yahoo_fin import stock_info as si
@@ -11,10 +18,10 @@ from yahoo_fin import stock_info as si
 from tqdm import tqdm
 
 def download_Prices(tickers_list):
-    # Download
+    # Download prices for the last 10 years 
     data = yf.download(
         tickers=tickers_list,
-        period='max', 
+        start=datetime(datetime.now().year-10, datetime.now().month, datetime.now().day).date(),
         interval='1d', #1m,2m,5m,15m,30m,60m,90m,1h,1d,5d,1wk,1mo,3mo
         group_by = 'column',    #'ticker' or 'column'
         auto_adjust=True,
