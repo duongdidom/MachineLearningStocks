@@ -17,24 +17,40 @@ from yahoo_fin import stock_info as si
 
 from tqdm import tqdm
 
+
 def download_Prices(tickers_list):
-    # Download prices for the last 10 years 
+    # Download prices for the last 10 years
     data = yf.download(
         tickers=tickers_list,
-        start=datetime(datetime.now().year-10, datetime.now().month, datetime.now().day).date(),
-        interval='1d', #1m,2m,5m,15m,30m,60m,90m,1h,1d,5d,1wk,1mo,3mo
-        group_by = 'column',    #'ticker' or 'column'
+        start=datetime(
+            datetime.now().year - 10, datetime.now().month, datetime.now().day
+        ).date(),
+        interval="1d",  # 1m,2m,5m,15m,30m,60m,90m,1h,1d,5d,1wk,1mo,3mo
+        group_by="column",  #'ticker', 'column'
         auto_adjust=True,
-        threads=True
-        )
+        threads=True,
+    )
 
     # Get close price. Replace nan value value by previous value
-    ClosePrices = data['Close'].reset_index()
-    ClosePrices.fillna(method='ffill', inplace=True)
+    ClosePrices = data["Close"].reset_index()
+    ClosePrices.fillna(method="ffill", inplace=True)
+
+    # pivot
+    ClosePrices = ClosePrices.melt(id_vars=["Date"])
+    ClosePrices.rename(columns={"variable": "Ticker", "value": "Price"}, inplace=True)
+
+    # lag and lead price and return
+    ClosePrices["Prev250day"] = ClosePrices.groupby(["Ticker"])["Date"].shift(250)
+    ClosePrices["Prev250dayPrice"] = ClosePrices.groupby(["Ticker"])["Price"].shift(250)    
+    ClosePrices["Prev250dayReturn"] = ClosePrices["Price"]/ClosePrices["Prev250dayPrice"]-1
+
+    ClosePrices["Next250day"] = ClosePrices.groupby(["Ticker"])["Date"].shift(-250)
+    ClosePrices["Next250dayPrice"] = ClosePrices.groupby(["Ticker"])["Price"].shift(-250)
+    ClosePrices["Next250dayReturn"] = ClosePrices["Next250dayPrice"]/ClosePrices["Price"]-1
 
     # to csv
-    ClosePrices.to_csv('_stock_prices.csv', index=False)
-    
+    ClosePrices.to_csv("_stock_prices.csv", index=False, date_format='%d/%m/%Y')
+
     return ClosePrices
 
 
@@ -48,44 +64,231 @@ def download_Fundamentals(tickers_list, ClosePrices):
         valuation_stats = si.get_stats(ticker)
         valuation_stats.columns = ["Valuation", "Current"]
 
-        income_statement = si.get_income_statement(ticker).transpose()
-        # income_statement.columns = income_statement.iloc[0]
-        # income_statement = income_statement.drop(income_statement.index[0])
+        income_statement = (
+            si.get_income_statement(ticker).set_index("Breakdown").transpose()
+        )
 
-        balance_sheet = si.get_balance_sheet(ticker).transpose()
-        # balance_sheet.columns = balance_sheet.iloc[0]
-        # balance_sheet = balance_sheet.drop(balance_sheet.index[0])
+        balance_sheet = si.get_balance_sheet(ticker).set_index("Breakdown").transpose()
 
-        cash_flow_statement = si.get_cash_flow(ticker).transpose()
-        # cash_flow_statement.columns = cash_flow_statement.iloc[0]
-        # cash_flow_statement = cash_flow_statement.drop(cash_flow_statement.index[0])
+        cash_flow_statement = (
+            si.get_cash_flow(ticker).set_index("Breakdown").transpose()
+        )
 
-        three_statements = income_statement.merge(balance_sheet, left_index=True, right_index=True, how='outer')
-        three_statements = three_statements.merge(cash_flow_statement, left_index=True, right_index=True, how='outer')
-        three_statements = three_statements.iloc[0]
-        three_statements = three_statements.drop(three_statements.index[0])
+        three_statements = income_statement.merge(
+            balance_sheet, left_index=True, right_index=True, how="outer"
+        )
+        three_statements = three_statements.merge(
+            cash_flow_statement, left_index=True, right_index=True, how="outer"
+        )
 
         val_stats_dict[ticker] = valuation_stats
         fndmntl_dict[ticker] = three_statements
 
-        # look up price for each date in three_statement dataframe. Calculate price change from 1 year ago from that date
+    # combine three statements
+    combined_three_statements = pd.concat(fndmntl_dict, sort=False).reset_index(
+        drop=False
+    )
+    combined_three_statements.rename(
+        columns={"level_0": "Ticker", "level_1": "Date"}, inplace=True
+    )
+    combined_three_statements["Date"] = combined_three_statements["Date"].replace(
+        "ttm", ClosePrices.Date.max().strftime("%m/%d/%Y")
+    )
+    combined_three_statements["Date"] = pd.to_datetime(
+        combined_three_statements["Date"], format="%m/%d/%Y"
+    )
 
-    combined_fndmntl = pd.concat(fndmntl_dict, sort=False).reset_index(drop=False)
-    combined_fndmntl.rename(columns={"level_0": "Ticker", "level_1": "Date"}, inplace=True)
-    
-    combined_valuation_stats = pd.concat(val_stats_dict, sort=False).reset_index(drop=False)
-    del combined_valuation_stats['level_1']
+    # combine statistics valuation
+    combined_valuation_stats = pd.concat(val_stats_dict, sort=False).reset_index(
+        drop=False
+    )
+    del combined_valuation_stats["level_1"]
     combined_valuation_stats.rename(columns={"level_0": "Ticker"}, inplace=True)
 
+    return combined_three_statements, combined_valuation_stats
 
-    return combined_fndmntl, combined_valuation_stats
+
+# lookup future share price from each statement date. 
+# TODO would like to do the same for each valuation stats as well, but NZ stocks only have most recent data. Unlike US stocks, have historical data
+def Next250dayReturn(combined_three_statements, ClosePrices, ALL_INDX):
+    # extract unique date in combine three statements & close price >>> sort date columns both dataframe >>> duplicate date column in close price df, because merge_asof will remove date column in close price >>> merge_asof and rename duplicate date column to trade date
+    dt_combine_three_statements = combined_three_statements['Date'].drop_duplicates().sort_values().reset_index(drop=True)
+    ClosePrices['Duplicate_Date'] = ClosePrices['Date']
+    dt_ClosePrices = ClosePrices[['Date','Duplicate_Date']].drop_duplicates().sort_values(['Date']).reset_index(drop=True)    
+    df_lookup_tradedate = pd.merge_asof(
+        dt_combine_three_statements,
+        dt_ClosePrices,
+        on=["Date"],
+        direction="backward",
+        allow_exact_matches=True
+    )
+
+    # look up price for each date in combined_three_statements dataframe
+    combined_three_statements = combined_three_statements.merge(df_lookup_tradedate, on='Date', how='left')
+    combined_three_statements.rename(columns={"Duplicate_Date": "Trade Date"}, inplace=True)
+    combined_three_statements = combined_three_statements.merge(
+        ClosePrices[['Date', 'Ticker', 'Next250dayReturn']],
+        left_on=['Ticker','Trade Date'],
+        right_on=['Ticker','Date'],
+        how='inner'
+        ).drop('Date_y', axis=1)
+    combined_three_statements.rename(columns={"Date_x": "Date"}, inplace=True)
+
+    # look up index for each date. TODO: should look up previous 250day return for index??? because past index return might be indicator for future equity price
+    for idx in ALL_INDX:
+        Idx_ClosePrices = ClosePrices[ClosePrices['Ticker']==idx].copy()
+        Idx_ClosePrices.rename(columns={'Next250dayReturn':'Next250dayReturn'+idx}, inplace=True)
+
+        combined_three_statements = combined_three_statements.merge(
+            Idx_ClosePrices[['Date', 'Ticker', 'Next250dayReturn'+idx]],
+            left_on=['Trade Date'],
+            right_on=['Date'],
+            how='inner'
+            ).drop(['Date_y','Ticker_y'], axis=1)
+        combined_three_statements.rename(columns={"Ticker_x":'Ticker',"Date_x": "Date"}, inplace=True)
+
+    # to csv
+    combined_three_statements.to_csv("_three_statements.csv", index=False, date_format='%d/%m/%Y')
+
+    return combined_three_statements
+
+
+
 
 if __name__ == "__main__":
 
     ALL_NZX = [
-        'ABA', 'AFC', 'AFT', 'AIA', 'AIR', 'ALF', 'AOR', 'APL', 'ARB', 'ARG', 'ARV', 'ATM', 'AUG', 'AWF', 'BFG', 'BGI', 'BGP', 'BLT', 'CAV','CBD', 'CDI', 'CEN', 'CGF', 'CMO', 'CNU', 'CVT', 'DGL', 'EBO', 'ENS', 'ERD', 'EVO', 'FBU', 'FPH', 'FRE', 'FSF', 'FWL', 'GEN', 'GEO', 'GFL', 'GMT', 'GNE', 'GSH', 'GTK', 'GXH', 'HGH', 'HLG', 'IFT', 'IKE', 'IPL', 'JLG', 'KMD', 'KPG', 'MCK', 'MCY', 'MEE', 'MEL', 'MET', 'MFT', 'MGL', 'MMH', 'MOA', 'MPG', 'MWE', 'NPH', 'NTL', 'NWF', 'NZK', 'NZM', 'NZO', 'NZR', 'NZX', 'OCA', 'PCT', 'PEB', 'PFI', 'PGW', 'PIL', 'PLX', 'POT', 'PPH', 'PYS', 'QEX', 'RAK', 'RBD', 'RYM', 'SAN', 'SCL', 'SCT', 'SCY', 'SDL', 'SEK', 'SKC', 'SKL', 'SKO', 'SKT', 'SML', 'SNC', 'SPG', 'SPK', 'SPN', 'SPY', 'STU', 'SUM', 'TGG', 'THL', 'TLL', 'TLT', 'TPW', 'TRA', 'TRS', 'TRU', 'TWR', 'VCT', 'VGL', 'VHP', 'VTL', 'WDT', 'WHS', 'ZEL'
-        ]
-    ALL_INDX = ['^NZ50','^GSPC','^DJI','^VIX']
+        "ABA",
+        "AFC",
+        "AFT",
+        "AIA",
+        "AIR",
+        "ALF",
+        "AOR",
+        "APL",
+        "ARB",
+        "ARG",
+        "ARV",
+        "ATM",
+        "AUG",
+        "AWF",
+        "BFG",
+        "BGI",
+        "BGP",
+        "BLT",
+        "CAV",
+        "CBD",
+        "CDI",
+        "CEN",
+        "CGF",
+        "CMO",
+        "CNU",
+        "CVT",
+        "DGL",
+        "EBO",
+        "ENS",
+        "ERD",
+        "EVO",
+        "FBU",
+        "FPH",
+        "FRE",
+        "FSF",
+        "FWL",
+        "GEN",
+        "GEO",
+        "GFL",
+        "GMT",
+        "GNE",
+        "GSH",
+        "GTK",
+        "GXH",
+        "HGH",
+        "HLG",
+        "IFT",
+        "IKE",
+        "IPL",
+        "JLG",
+        "KMD",
+        "KPG",
+        "MCK",
+        "MCY",
+        "MEE",
+        "MEL",
+        "MET",
+        "MFT",
+        "MGL",
+        "MMH",
+        "MOA",
+        "MPG",
+        "MWE",
+        "NPH",
+        "NTL",
+        "NWF",
+        "NZK",
+        "NZM",
+        "NZO",
+        "NZR",
+        "NZX",
+        "OCA",
+        "PCT",
+        "PEB",
+        "PFI",
+        "PGW",
+        "PIL",
+        "PLX",
+        "POT",
+        "PPH",
+        "PYS",
+        "QEX",
+        "RAK",
+        "RBD",
+        "RYM",
+        "SAN",
+        "SCL",
+        "SCT",
+        "SCY",
+        "SDL",
+        "SEK",
+        "SKC",
+        "SKL",
+        "SKO",
+        "SKT",
+        "SML",
+        "SNC",
+        "SPG",
+        "SPK",
+        "SPN",
+        "SPY",
+        "STU",
+        "SUM",
+        "TGG",
+        "THL",
+        "TLL",
+        "TLT",
+        "TPW",
+        "TRA",
+        "TRS",
+        "TRU",
+        "TWR",
+        "VCT",
+        "VGL",
+        "VHP",
+        "VTL",
+        "WDT",
+        "WHS",
+        "ZEL",
+    ]
+    ALL_INDX = ["^NZ50", "^GSPC", "^DJI", "^VIX"]
+
+    #. 
     ClosePrices = download_Prices([x+'.NZ' for x in ALL_NZX[:2]] + ALL_INDX)
-    download_Fundamentals([x+'.NZ' for x in ALL_NZX[:2]], ClosePrices)
-    print(f'DONE !!!!!!!!!')
+
+    #.
+    combined_three_statements, combined_valuation_stats = download_Fundamentals([x+'.NZ' for x in ALL_NZX[:2]], ClosePrices)
+
+    #.
+    combined_three_statements = Next250dayReturn(combined_three_statements, ClosePrices, ALL_INDX)
+
+
+    print(f"DONE !!!!!!!!!")
+
