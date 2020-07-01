@@ -12,8 +12,12 @@
 """
 from datetime import datetime
 import pandas as pd
+import numpy as np
 import yfinance as yf
 from yahoo_fin import stock_info as si
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import precision_score
 
 from tqdm import tqdm
 
@@ -91,9 +95,7 @@ def download_Fundamentals(tickers_list, ClosePrices):
     combined_three_statements.rename(
         columns={"level_0": "Ticker", "level_1": "Date"}, inplace=True
     )
-    combined_three_statements["Date"] = combined_three_statements["Date"].replace(
-        "ttm", ClosePrices.Date.max().strftime("%m/%d/%Y")
-    )
+    combined_three_statements = combined_three_statements[combined_three_statements['Date'] != 'ttm'].reset_index(drop=True)
     combined_three_statements["Date"] = pd.to_datetime(
         combined_three_statements["Date"], format="%m/%d/%Y"
     )
@@ -134,25 +136,66 @@ def Next250dayReturn(combined_three_statements, ClosePrices, ALL_INDX):
         ).drop('Date_y', axis=1)
     combined_three_statements.rename(columns={"Date_x": "Date"}, inplace=True)
 
-    # look up index for each date. TODO: should look up previous 250day return for index??? because past index return might be indicator for future equity price
+    # look up past index return for each date.
     for idx in ALL_INDX:
         Idx_ClosePrices = ClosePrices[ClosePrices['Ticker']==idx].copy()
-        Idx_ClosePrices.rename(columns={'Next250dayReturn':'Next250dayReturn'+idx}, inplace=True)
+        # if nzx 50 index then use future return
+        if idx == '^NZ50':
+            Idx_ClosePrices.rename(columns={'Next250dayReturn':'Next250dayReturn'+idx}, inplace=True)
 
-        combined_three_statements = combined_three_statements.merge(
-            Idx_ClosePrices[['Date', 'Ticker', 'Next250dayReturn'+idx]],
-            left_on=['Trade Date'],
-            right_on=['Date'],
-            how='inner'
-            ).drop(['Date_y','Ticker_y'], axis=1)
+            combined_three_statements = combined_three_statements.merge(
+                Idx_ClosePrices[['Date', 'Ticker', 'Next250dayReturn'+idx]],
+                left_on=['Trade Date'],
+                right_on=['Date'],
+                how='inner'
+                ).drop(['Date_y','Ticker_y'], axis=1)
+        # all other index, use past return
+        else:            
+            Idx_ClosePrices.rename(columns={'Prev250dayReturn':'Prev250dayReturn'+idx}, inplace=True)
+
+            combined_three_statements = combined_three_statements.merge(
+                Idx_ClosePrices[['Date', 'Ticker', 'Prev250dayReturn'+idx]],
+                left_on=['Trade Date'],
+                right_on=['Date'],
+                how='inner'
+                ).drop(['Date_y','Ticker_y'], axis=1)
+        
         combined_three_statements.rename(columns={"Ticker_x":'Ticker',"Date_x": "Date"}, inplace=True)
 
-    # to csv
-    combined_three_statements.to_csv("_three_statements.csv", index=False, date_format='%d/%m/%Y')
-
+    combined_three_statements['BeatIndex'] = combined_three_statements['Next250dayReturn'] > combined_three_statements['Next250dayReturn^NZ50']
+    
     return combined_three_statements
 
 
+def Learn(combined_three_statements, ALL_INDX):
+    # clean - character; Nan
+    combined_three_statements.replace('-', 0, inplace=True)
+    combined_three_statements.fillna(0, inplace=True)
+
+    # reorder columns so that explanatory variable are on the right hand side of dataframe
+    non_train_col = ['Ticker','Date','Trade Date','Next250dayReturn','Next250dayReturn^NZ50','BeatIndex']
+    list_trainer_col = [x for x in combined_three_statements.columns.tolist() if x not in non_train_col]
+    combined_three_statements = combined_three_statements[non_train_col + list_trainer_col]
+    
+    # to csv
+    combined_three_statements.to_csv("_three_statements.csv", index=False, date_format='%d/%m/%Y')
+    
+    # Generate the train set and test set by randomly splitting the dataset
+    X = combined_three_statements.iloc[:,-len(list_trainer_col):].values
+    Y = combined_three_statements['BeatIndex'].values
+    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2)
+
+    # Instantiate a RandomForestClassifier with 100 trees, then fit it to the training data
+    clf = RandomForestClassifier(n_estimators=100, random_state=0)
+    clf.fit(X_train, Y_train)
+
+    # Generate the predictions, then print test set accuracy and precision
+    Y_predict = clf.predict(X_test)
+    print("Classifier performance\n", "=" * 20)
+    print(f"Accuracy score: {clf.score(X_test, Y_test): .2f}")
+    print(f"Precision score: {precision_score(Y_test, Y_predict): .2f}")
+
+    print("a")
 
 
 if __name__ == "__main__":
@@ -288,6 +331,9 @@ if __name__ == "__main__":
 
     #.
     combined_three_statements = Next250dayReturn(combined_three_statements, ClosePrices, ALL_INDX)
+
+    #.
+    Learn(combined_three_statements, ALL_INDX)
 
 
     print(f"DONE !!!!!!!!!")
