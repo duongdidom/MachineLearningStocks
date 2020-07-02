@@ -58,6 +58,13 @@ def download_Prices(tickers_list):
     return ClosePrices
 
 
+def Read_download_Prices():
+    # dateparse = lambda x: pd.datetime.strptime(x, '%d/%m/%Y')
+    df = pd.read_csv("_stock_prices.csv", parse_dates=['Date','Prev250day','Next250day'])#, date_parser=dateparse)
+
+    return df
+
+
 def download_Fundamentals(tickers_list, ClosePrices):
     # empty dictionary to append data
     val_stats_dict = {}
@@ -112,7 +119,7 @@ def download_Fundamentals(tickers_list, ClosePrices):
 
 # lookup future share price from each statement date. 
 # TODO would like to do the same for each valuation stats as well, but NZ stocks only have most recent data. Unlike US stocks, have historical data
-def Next250dayReturn(combined_three_statements, ClosePrices, ALL_INDX):
+def Join_Fndmntl_w_Price(combined_three_statements, ClosePrices, ALL_INDX):
     # extract unique date in combine three statements & close price >>> sort date columns both dataframe >>> duplicate date column in close price df, because merge_asof will remove date column in close price >>> merge_asof and rename duplicate date column to trade date
     dt_combine_three_statements = combined_three_statements['Date'].drop_duplicates().sort_values().reset_index(drop=True)
     ClosePrices['Duplicate_Date'] = ClosePrices['Date']
@@ -163,11 +170,7 @@ def Next250dayReturn(combined_three_statements, ClosePrices, ALL_INDX):
         combined_three_statements.rename(columns={"Ticker_x":'Ticker',"Date_x": "Date"}, inplace=True)
 
     combined_three_statements['BeatIndex'] = combined_three_statements['Next250dayReturn'] > combined_three_statements['Next250dayReturn^NZ50']
-    
-    return combined_three_statements
 
-
-def Learn(combined_three_statements, ALL_INDX):
     # clean - character; Nan
     combined_three_statements.replace('-', 0, inplace=True)
     combined_three_statements.fillna(0, inplace=True)
@@ -180,6 +183,20 @@ def Learn(combined_three_statements, ALL_INDX):
     # to csv
     combined_three_statements.to_csv("_three_statements.csv", index=False, date_format='%d/%m/%Y')
     
+    return combined_three_statements
+
+
+def Read_combined_Fundamental():
+    # dateparse = lambda x: pd.datetime.strptime(x, '%d/%m/%Y')
+    df = pd.read_csv("_three_statements.csv", parse_dates=['Date','Trade Date'])    #, date_parser=dateparse)
+
+    return df
+
+
+def Learn(combined_three_statements, ALL_INDX):
+    non_train_col = ['Ticker','Date','Trade Date','Next250dayReturn','Next250dayReturn^NZ50','BeatIndex']
+    list_trainer_col = [x for x in combined_three_statements.columns.tolist() if x not in non_train_col]
+
     # Generate the train set and test set by randomly splitting the dataset
     X = combined_three_statements.iloc[:,-len(list_trainer_col):].values
     Y = combined_three_statements['BeatIndex'].values
@@ -324,13 +341,15 @@ if __name__ == "__main__":
     ALL_INDX = ["^NZ50", "^GSPC", "^DJI", "^VIX"]
 
     #. 
-    ClosePrices = download_Prices([x+'.NZ' for x in ALL_NZX[:2]] + ALL_INDX)
+    # ClosePrices = download_Prices([x+'.NZ' for x in ALL_NZX[:2]] + ALL_INDX)
+    ClosePrices = Read_download_Prices()
 
     #.
-    combined_three_statements, combined_valuation_stats = download_Fundamentals([x+'.NZ' for x in ALL_NZX[:2]], ClosePrices)
+    # combined_three_statements, combined_valuation_stats = download_Fundamentals([x+'.NZ' for x in ALL_NZX], ClosePrices)    
 
     #.
-    combined_three_statements = Next250dayReturn(combined_three_statements, ClosePrices, ALL_INDX)
+    # combined_three_statements = Join_Fndmntl_w_Price(combined_three_statements, ClosePrices, ALL_INDX)
+    combined_three_statements = Read_combined_Fundamental()
 
     #.
     Learn(combined_three_statements, ALL_INDX)
