@@ -8,7 +8,9 @@
     - use return instead of price difference as dependent variable
     - compute graham number
     - add explanatory variables: OCR, business confidence, GDP, inflation, interest rate, 
-    - use PE ratio, sharpe ratio in Timbre, if exists
+    - use PE ratio in thist.IST = market price/EPS
+    - sharpe ratio in thist.PST
+    - earnings in thist.EARNINGSV
 """
 from datetime import datetime
 import pandas as pd
