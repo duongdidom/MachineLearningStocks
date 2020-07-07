@@ -8,9 +8,9 @@
     - use return instead of price difference as dependent variable
     - compute graham number
     - add explanatory variables: OCR, business confidence, GDP, inflation, interest rate, 
-    - use PE ratio in thist.IST = market price/EPS
-    - sharpe ratio in thist.PST
-    - earnings in thist.EARNINGSV
+    - use PE ratio in thist.IST = market price/EPS. Use date where balance_date in table EARNINGSV are FLLYR. Net income for the full year = IST_LAST_EARN + IST_PREV_EARN. Date is where IST_START_BAL_DATE = IST_LAST_EOY_DATE = IST_EARN_BAL_DATE. Grab NTA, PE, EPS where those conditions met. 
+    - sharpe ratio, beta vs ALL index, stddeviation in thist.PST
+    - earnings in thist.EARNINGSV: coa_ann_type = FLLYR for full year data. Intangibles is same in table IST. Merge on ticker and balance date. 
 """
 from datetime import datetime
 import pandas as pd
@@ -62,7 +62,7 @@ def download_Prices(tickers_list):
 
 def Read_download_Prices():
     # dateparse = lambda x: pd.datetime.strptime(x, '%d/%m/%Y')
-    df = pd.read_csv("_stock_prices.csv", parse_dates=['Date','Prev250day','Next250day'])#, date_parser=dateparse)
+    df = pd.read_csv("_stock_prices.csv", dayfirst=True)    #parse_dates=['Date','Prev250day','Next250day'] , date_parser=dateparse)
 
     return df
 
@@ -74,9 +74,11 @@ def download_Fundamentals(tickers_list, ClosePrices):
 
     # loop each stocks
     for ticker in tqdm(tickers_list, desc="Parsing progress:", unit="tickers"):
+        # get ratios
         valuation_stats = si.get_stats(ticker)
         valuation_stats.columns = ["Valuation", "Current"]
 
+        # get three statements
         income_statement = (
             si.get_income_statement(ticker).set_index("Breakdown").transpose()
         )
@@ -97,6 +99,13 @@ def download_Fundamentals(tickers_list, ClosePrices):
         val_stats_dict[ticker] = valuation_stats
         fndmntl_dict[ticker] = three_statements
 
+    # combine statistics valuation
+    combined_valuation_stats = pd.concat(val_stats_dict, sort=False).reset_index(
+        drop=False
+    )
+    del combined_valuation_stats["level_1"]
+    combined_valuation_stats.rename(columns={"level_0": "Ticker"}, inplace=True)
+
     # combine three statements
     combined_three_statements = pd.concat(fndmntl_dict, sort=False).reset_index(
         drop=False
@@ -109,14 +118,7 @@ def download_Fundamentals(tickers_list, ClosePrices):
         combined_three_statements["Date"], format="%m/%d/%Y"
     )
 
-    # combine statistics valuation
-    combined_valuation_stats = pd.concat(val_stats_dict, sort=False).reset_index(
-        drop=False
-    )
-    del combined_valuation_stats["level_1"]
-    combined_valuation_stats.rename(columns={"level_0": "Ticker"}, inplace=True)
-
-    return combined_three_statements, combined_valuation_stats
+    return combined_valuation_stats, combined_three_statements
 
 
 # lookup future share price from each statement date. 
@@ -190,7 +192,7 @@ def Join_Fndmntl_w_Price(combined_three_statements, ClosePrices, ALL_INDX):
 
 def Read_combined_Fundamental():
     # dateparse = lambda x: pd.datetime.strptime(x, '%d/%m/%Y')
-    df = pd.read_csv("_three_statements.csv", parse_dates=['Date','Trade Date'])    #, date_parser=dateparse)
+    df = pd.read_csv("_three_statements.csv", dayfirst=True)    #parse_dates=['Date','Trade Date'], date_parser=dateparse)
 
     return df
 
@@ -347,7 +349,7 @@ if __name__ == "__main__":
     ClosePrices = Read_download_Prices()
 
     #.
-    # combined_three_statements, combined_valuation_stats = download_Fundamentals([x+'.NZ' for x in ALL_NZX], ClosePrices)    
+    # combined_valuation_stats, combined_three_statements = download_Fundamentals([x+'.NZ' for x in ALL_NZX], ClosePrices)    
 
     #.
     # combined_three_statements = Join_Fndmntl_w_Price(combined_three_statements, ClosePrices, ALL_INDX)
